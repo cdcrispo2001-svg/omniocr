@@ -79,26 +79,56 @@
 
   /* ---------------- one recognition round ---------------- */
 
+  /**
+   * Build each variant, then recognise them concurrently.
+   *
+   * Construction is deliberately serial. A single Sauvola pass holds roughly
+   * nine float32 buffers the size of the page — on a large scan that is
+   * hundreds of megabytes — so building four variants at once exhausts the
+   * WASM heap and aborts the page. Recognition, which is the expensive part,
+   * still runs in parallel across the worker pool; only the image maths is
+   * sequenced, and each variant's Mats are released as soon as its bitmap has
+   * been extracted.
+   */
   async function runVariants(ctx, canonical, prof, plan, psm, dpi, opts = {}) {
     const { cv, pool } = ctx;
     const results = [];
-    const jobs = plan.map(async (variant) => {
+    const jobs = [];
+
+    for (const variant of plan) {
       const t0 = now();
+      let bmp = null;
       let mat = null;
       try {
         mat = scope.Restore.buildVariant(cv, canonical, prof, variant);
-        const bmp = scope.CVB.grayToBmp(mat, Math.round(dpi * variant.scale));
-        const data = await pool.recognize(bmp, { psm, dpi: dpi * variant.scale, timeoutMs: opts.variantTimeoutMs || 90000 });
-        const result = scope.OCR.normalizeResult(data, { variant: variant.id, psm });
-        results.push({ variant, result, ms: now() - t0 });
+        bmp = scope.CVB.grayToBmp(mat, Math.round(dpi * variant.scale));
       } catch (err) {
-        ctx.log && ctx.log(`variant ${variant.id} failed: ${err}`);
+        ctx.log && ctx.log(`variant ${variant.id} could not be built: ${describe(cv, err)}`);
       } finally {
-        if (mat) mat.delete();
+        if (mat) { try { mat.delete(); } catch (_) { /* already gone */ } }
       }
-    });
+      if (!bmp) continue;
+
+      jobs.push((async () => {
+        try {
+          const data = await pool.recognize(bmp, { psm, dpi: dpi * variant.scale, timeoutMs: opts.variantTimeoutMs || 90000 });
+          results.push({ variant, result: scope.OCR.normalizeResult(data, { variant: variant.id, psm }), ms: now() - t0 });
+        } catch (err) {
+          ctx.log && ctx.log(`variant ${variant.id} failed: ${describe(cv, err)}`);
+        }
+      })());
+    }
+
     await Promise.all(jobs);
     return results;
+  }
+
+  /** OpenCV throws raw pointers from WASM; turn them into readable messages. */
+  function describe(cv, err) {
+    if (typeof err === 'number' && cv && cv.exceptionFromPtr) {
+      try { return `OpenCV: ${cv.exceptionFromPtr(err).msg}`; } catch (_) { return `OpenCV error ${err}`; }
+    }
+    return String((err && err.message) || err);
   }
 
   /* ---------------- born-digital pages ---------------- */
@@ -176,6 +206,26 @@
     let gray = scope.CVB.toGray(src);
     src.delete();
 
+    // Bound the working image before anything else touches it.
+    //
+    // Broadsheet newspapers, posters and large-format scans arrive at tens of
+    // megapixels. Every downstream stage allocates float buffers proportional
+    // to this size, so an unbounded page exhausts the WASM heap outright — and
+    // the recogniser cannot use that resolution anyway. The reduction is folded
+    // into the transform, so reported coordinates still refer to the original.
+    const MAX_WORK_PIXELS = 16e6;
+    let preMatrix = M.identity();
+    const inputPixels = gray.cols * gray.rows;
+    if (inputPixels > MAX_WORK_PIXELS) {
+      const s = Math.sqrt(MAX_WORK_PIXELS / inputPixels);
+      const small = new cv.Mat();
+      cv.resize(gray, small, new cv.Size(0, 0), s, s, cv.INTER_AREA);
+      gray.delete();
+      gray = small;
+      preMatrix = M.scale(s, s);
+      ctx.log && ctx.log(`page ${page.index}: ${(inputPixels / 1e6).toFixed(1)} MP reduced to ${(gray.cols * gray.rows / 1e6).toFixed(1)} MP for processing`);
+    }
+
     // Born-digital page: the PDF already carries exact text. Recognising it
     // again could only lose characters, so we keep the supplied lines and spend
     // the effort on structure instead.
@@ -231,7 +281,8 @@
     });
     timings.geometry = now() - tg;
     const canonical = norm.mat;
-    const toOriginal = M.invert(norm.matrix);
+    const toCanonical = M.mul(norm.matrix, preMatrix);
+    const toOriginal = M.invert(toCanonical);
 
     // Re-profile only if geometry actually changed the image; otherwise the
     // first profile is still exactly valid and re-measuring is pure cost.
@@ -338,8 +389,13 @@
     if (opts.tables !== false && !unreadable && repaired.length) {
       let bin = null;
       try {
+        // Rules matter more than glyphs here, and rotation leaves them
+        // anti-aliased to grey. A global threshold on the flattened page keeps
+        // thin grey rules that adaptive thresholding discards, which is the
+        // difference between a deskewed table being recognised as a table and
+        // collapsing into loose text.
         const flat = scope.Restore.flattenIllumination(cv, canonical);
-        bin = scope.Restore.adaptiveGaussian(cv, flat, Math.max(15, (prof.componentHeight || 14) * 2), 10);
+        bin = scope.Restore.otsu(cv, flat);
         flat.delete();
         tables = scope.Tables.detect(cv, bin, repaired, layout.stats, {});
       } catch (err) {
@@ -375,7 +431,7 @@
       profile: prof,
       depth: depthInfo,
       rotation,
-      transform: { toCanonical: norm.matrix, toOriginal },
+      transform: { toCanonical, toOriginal },
       geometrySteps: norm.steps,
       lines: repaired.map((l) => ({
         text: l.text,

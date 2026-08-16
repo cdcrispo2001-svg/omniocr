@@ -26,10 +26,15 @@
     if (lines.length < 8) return [{ x0: 0, x1: pageW }];
     const bins = 200;
     const cover = new Float64Array(bins);
-    for (const l of lines) {
-      const a = Math.max(0, Math.floor((l.bbox.x0 / pageW) * bins));
-      const b = Math.min(bins - 1, Math.ceil((l.bbox.x1 / pageW) * bins));
-      const h = l.bbox.y1 - l.bbox.y0;
+    // Project words, not lines. A line box is a hull: one noisy line that the
+    // recogniser merged across the gutter paints the whole width and erases the
+    // gap, which is why faint, shadowed and speckled two-column pages lost
+    // their columns entirely. Words stay on their own side of the gutter.
+    const units = lines.flatMap((l) => (l.words && l.words.length ? l.words : [l]));
+    for (const u of units) {
+      const a = Math.max(0, Math.floor((u.bbox.x0 / pageW) * bins));
+      const b = Math.min(bins - 1, Math.ceil((u.bbox.x1 / pageW) * bins));
+      const h = u.bbox.y1 - u.bbox.y0;
       for (let i = a; i <= b; i++) cover[i] += h;
     }
     const maxCover = Math.max(...cover);
@@ -51,21 +56,87 @@
     const interior = gutters.filter(([a, b]) => a > bins * 0.12 && b < bins * 0.88);
     if (!interior.length) return [{ x0: 0, x1: pageW }];
 
-    const cuts = interior.map(([a, b]) => ((a + b) / 2 / bins) * pageW);
+    // A real column gutter is never crossed by a line of text. Whitespace that
+    // happens to line up — the space between an invoice's description and its
+    // amounts, say — is crossed constantly, and treating it as a column turns
+    // row-major reading order into column-major, scrambling the document.
+    const margin = pageW * 0.004;
+    const crossable = interior.filter(([a, b]) => {
+      const x = ((a + b) / 2 / bins) * pageW;
+      const crossing = units.filter((u) => u.bbox.x0 < x - margin && u.bbox.x1 > x + margin).length;
+      return crossing / units.length <= 0.02;
+    });
+    if (!crossable.length) return [{ x0: 0, x1: pageW }];
+
+    const cuts = crossable.map(([a, b]) => ((a + b) / 2 / bins) * pageW);
     const bounds = [0, ...cuts, pageW];
     const cols = [];
     for (let i = 0; i < bounds.length - 1; i++) {
       const x0 = bounds[i]; const x1 = bounds[i + 1];
-      const inCol = lines.filter((l) => (l.bbox.x0 + l.bbox.x1) / 2 >= x0 && (l.bbox.x0 + l.bbox.x1) / 2 < x1);
-      if (inCol.length >= 3) cols.push({ x0, x1 });
+      const inCol = units.filter((u) => (u.bbox.x0 + u.bbox.x1) / 2 >= x0 && (u.bbox.x0 + u.bbox.x1) / 2 < x1);
+      if (inCol.length >= 8) {
+        cols.push({
+          x0,
+          x1,
+          top: Math.min(...inCol.map((l) => l.bbox.y0)),
+          bottom: Math.max(...inCol.map((l) => l.bbox.y1)),
+          count: inCol.length,
+        });
+      }
     }
     if (cols.length < 2) return [{ x0: 0, x1: pageW }];
+
+    // Parallel columns run down the page together. A table's numeric column
+    // occupies only the rows of the table, while the text beside it runs the
+    // full height — so comparing vertical extents separates a real two-column
+    // layout from a table that merely has a gap down the middle.
+    const extents = cols.map((c) => c.bottom - c.top);
+    const contentTop = Math.min(...cols.map((c) => c.top));
+    const contentBottom = Math.max(...cols.map((c) => c.bottom));
+    const contentHeight = Math.max(1, contentBottom - contentTop);
+    if (Math.min(...extents) / Math.max(...extents) < 0.6) return [{ x0: 0, x1: pageW }];
+    if (Math.min(...extents) / contentHeight < 0.45) return [{ x0: 0, x1: pageW }];
 
     // A "column" that holds only full-width lines is really a spanning block;
     // require each detected column to hold mostly narrow lines.
     const avgW = median(lines.map((l) => l.bbox.x1 - l.bbox.x0));
     if (avgW > pageW * 0.75) return [{ x0: 0, x1: pageW }];
+
+    // Text columns are siblings: a two-column article splits the page into
+    // roughly equal halves. A table's columns are nothing of the sort — a wide
+    // description beside narrow amounts — and reading such a page column-major
+    // would interleave every row. Lopsided splits are therefore not columns.
+    const widths = cols.map((c) => c.x1 - c.x0);
+    if (Math.max(...widths) / Math.max(1, Math.min(...widths)) > 2.2) return [{ x0: 0, x1: pageW }];
     return cols;
+  }
+
+  /**
+   * Order lines as a reader would.
+   *
+   * Sorting by top edge is wrong whenever two pieces of text share a baseline
+   * but not a font size: a form's bold value has a taller glyph box than its
+   * label, so a naive sort emits "Sarah Immaculate Given names:" — the answer
+   * before the question. Lines are therefore banded into rows by vertical
+   * centre first, and ordered left-to-right within each row.
+   */
+  function readingOrder(lines, medianH) {
+    if (lines.length < 2) return [...lines];
+
+    const tol = Math.max(4, (medianH || 14) * 0.6);
+    const sorted = [...lines].sort((a, b) => ((a.bbox.y0 + a.bbox.y1) / 2) - ((b.bbox.y0 + b.bbox.y1) / 2));
+    const rows = [];
+    for (const l of sorted) {
+      const centre = (l.bbox.y0 + l.bbox.y1) / 2;
+      const row = rows[rows.length - 1];
+      if (row && Math.abs(centre - row.centre) <= tol) {
+        row.items.push(l);
+        row.centre = row.items.reduce((s, x) => s + (x.bbox.y0 + x.bbox.y1) / 2, 0) / row.items.length;
+      } else {
+        rows.push({ centre, items: [l] });
+      }
+    }
+    return rows.flatMap((r) => r.items.sort((a, b) => a.bbox.x0 - b.bbox.x0));
   }
 
   /* ---------------- line typing ---------------- */
@@ -202,12 +273,13 @@
 
     const blocks = [];
     columns.forEach((col, ci) => {
-      const inCol = typed
-        .filter((l) => {
+      const inCol = readingOrder(
+        typed.filter((l) => {
           const cx = (l.bbox.x0 + l.bbox.x1) / 2;
           return cx >= col.x0 && cx < col.x1;
-        })
-        .sort((a, b) => (a.bbox.y0 - b.bbox.y0) || (a.bbox.x0 - b.bbox.x0));
+        }),
+        stats.medianH,
+      );
       groupParagraphs(inCol, stats, pageW).forEach((b) => blocks.push({ ...b, column: ci }));
     });
 
@@ -219,5 +291,5 @@
     return { blocks, columns, stats };
   }
 
-  scope.Layout = { analyze, detectColumns, joinLines, classifyLines, BULLET, NUMBERED };
+  scope.Layout = { analyze, detectColumns, joinLines, classifyLines, readingOrder, BULLET, NUMBERED };
 })(self);

@@ -285,13 +285,19 @@
       else if (str < 0.35 && l.conf < 70) bad = true;
       // A "line" of stray marks is never text, however long it is. Scratches,
       // fold lines and table rules read as runs of | I l / _ — with no words.
-      else if (letters === 0) bad = true;
+      // Digits are the exception and must never be caught here: a table column
+      // of quantities or amounts is letterless and entirely legitimate, and
+      // discarding it silently deletes the numbers from an invoice.
+      else if (letters === 0 && !/\d/.test(text)) bad = true;
       else if (bars > 0.45 && lex < 0.4) bad = true;
       else if (alphaRatio < 0.4 && lex < 0.25 && !/\d{2,}/.test(text)) bad = true;
       // Prose that contains almost no real words is not prose. Numeric lines
       // (amounts, references, dates) are exempt — they are legitimately absent
       // from any lexicon and must survive on invoices and forms.
-      else if (!numeric && strict < 0.12) bad = true;
+      // A line of proper nouns ("Dr. B. Ochieng, Mulago") is legitimately absent
+      // from any lexicon, so lexicality alone must not condemn it — the
+      // recogniser's own confidence has to agree that it is doubtful.
+      else if (!numeric && strict < 0.12 && l.conf < 88) bad = true;
       else if (!numeric && strict < 0.34 && l.conf < 72) bad = true;
       else if (!numeric && strict < 0.5 && l.conf < 50) bad = true;
       // Ratios are not enough on their own: one real word among a dozen

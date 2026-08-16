@@ -45,7 +45,7 @@ Download the installer for your platform from
 ```bash
 npm install
 npm run dist:mac     # → dist/OmniOCR-1.0.0-arm64.dmg
-npm run dist:win     # → dist/OmniOCR Setup 1.0.0.exe  (run on Windows)
+npm run dist:win     # → dist/OmniOCR Setup 1.0.0.exe  (cross-builds from macOS too)
 ```
 
 Builds are unsigned. On macOS, right-click the app → **Open** on first launch.
@@ -72,6 +72,25 @@ npm run harness                        # full matrix
 npm run harness -- --harness-only=severe --harness-verbose
 npm run harness -- --harness-exports   # exporter self-test
 ```
+
+## What it does not do well
+
+Stated plainly, because knowing the edges matters more than a marketing number:
+
+- **Two-column pages that are also noisy or smudged.** Column detection needs a
+  vertical gutter that no line of text crosses; heavy noise merges lines across
+  it, and the two columns then interleave. The text is still read correctly —
+  the order degrades.
+- **Ruled tables on pages that needed deskewing.** Rotation softens the printed
+  rules, and the grid is not always recovered; cells come out as text.
+- **Newspaper-style layouts.** Verified on a real 48-page broadsheet: the words
+  come out at 95–96% confidence and stories read in order, but the page is
+  reported as one column rather than five.
+- **Handwriting**, and non-Latin scripts in the *PDF text layer* specifically
+  (they are recognised, and appear correctly in every other export format).
+
+Full measured detail, including the cases that fail, is in
+[docs/TEST-RESULTS.md](docs/TEST-RESULTS.md).
 
 ## Architecture in one paragraph
 

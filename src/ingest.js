@@ -109,7 +109,10 @@ async function ingestPdf(bytes, name, opts) {
     const base = page.getViewport({ scale: 1 });
     // PDF user units are 1/72 inch, so scale = dpi/72 for the requested density.
     let scale = targetDpi / 72;
-    const maxPixels = opts.maxPixels || 40e6;
+    // Ceiling on rasterisation. Above this the recogniser gains nothing while
+    // memory and time costs keep climbing; large-format pages are rendered at
+    // whatever density fits instead.
+    const maxPixels = opts.maxPixels || 24e6;
     if (base.width * base.height * scale * scale > maxPixels) {
       scale = Math.sqrt(maxPixels / (base.width * base.height));
     }
