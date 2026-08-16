@@ -1,0 +1,144 @@
+{
+  "name": "omniocr",
+  "productName": "OmniOCR",
+  "version": "1.0.0",
+  "description": "Structure-preserving multi-page OCR for damaged, faint, skewed and low-resolution documents.",
+  "main": "electron/main.js",
+  "author": {
+    "name": "OmniOCR",
+    "email": "cdcrispo2001@gmail.com"
+  },
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "harness": "electron . --harness",
+    "dist:mac": "electron-builder --mac dmg --arm64",
+    "dist:win": "electron-builder --win zip nsis --x64",
+    "dist:winzip": "electron-builder --win zip --x64"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "@techstark/opencv-js": "^4.11.0-release.1",
+    "docx": "^9.5.1",
+    "libheif-js": "^1.18.2",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "tesseract.js": "^5.1.1",
+    "utif": "^3.1.0"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.omniocr.app",
+    "productName": "OmniOCR",
+    "copyright": "OmniOCR",
+    "asar": true,
+    "asarUnpack": [
+      "**/tesseract.js-core/**",
+      "**/@techstark/opencv-js/**",
+      "**/tesseract.js/dist/**",
+      "**/pdfjs-dist/build/**",
+      "vendor/**"
+    ],
+    "files": [
+      "electron/**",
+      "src/**",
+      "core/**",
+      "vendor/**",
+      "package.json",
+      "!test/**",
+      "!**/*.map",
+      "!node_modules/electron/**",
+      "!node_modules/electron-builder/**",
+      "!node_modules/app-builder-*/**",
+      "!node_modules/**/*.md",
+      "!node_modules/**/test/**",
+      "!node_modules/**/docs/**"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/tessdata",
+        "to": "tessdata"
+      },
+      {
+        "from": "vendor/lexicon",
+        "to": "lexicon"
+      },
+      {
+        "from": "vendor/fonts",
+        "to": "fonts"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "darkModeSupport": true,
+      "extraResources": [
+        {
+          "from": "native/macos-depth/omni-depth",
+          "to": "omni-depth"
+        }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "OmniOCR ${version}",
+      "contents": [
+        {
+          "x": 140,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "OmniOCR"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    }
+  }
+}

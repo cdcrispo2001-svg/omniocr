@@ -1,0 +1,89 @@
+name: build
+
+# Produces installers for every platform and runs the accuracy gate.
+# macOS and Windows are built on their own runners: electron-builder cannot
+# produce a signed NSIS installer from macOS without Wine, and a native runner
+# is both faster and closer to what users actually install.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  accuracy:
+    name: Accuracy gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The harness renders and recognises pages in a real Chromium renderer,
+      # so it needs a display even though no window is shown.
+      - name: Run degradation suite
+        run: xvfb-run --auto-servernum npm run harness -- --harness-kinds=article,invoice,form
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: accuracy-report
+          path: test/out/report.json
+
+  macos:
+    name: macOS (arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build depth helper
+        run: swiftc -O -o native/macos-depth/omni-depth native/macos-depth/main.swift
+      - name: Build DMG
+        run: npx electron-builder --mac dmg --arm64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OmniOCR-macOS-arm64
+          path: dist/*.dmg
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build installer and portable zip
+        run: npx electron-builder --win nsis zip --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OmniOCR-Windows-x64
+          path: |
+            dist/*.exe
+            dist/*.zip
+
+  release:
+    name: Publish release
+    needs: [accuracy, macos, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+test/out/
+build/icon.iconset/
+native/macos-depth/omni-depth
+*.log
+.DS_Store

@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>probe</title>
+<script>
+window.__probe = { status: 'loading' };
+var Module = { onRuntimeInitialized: run };
+</script>
+<script src="omni://node/@techstark/opencv-js/dist/opencv.js"></script>
+<script>
+const WANT = ['fastNlMeansDenoising','createCLAHE','CLAHE','connectedComponentsWithStats','integral','warpPerspective','getPerspectiveTransform','adaptiveThreshold','bilateralFilter','medianBlur','getStructuringElement','HoughLinesP','minAreaRect','findContours','Laplacian','remap','resize','LUT','convertScaleAbs','threshold','morphologyEx','GaussianBlur','Canny','boxFilter','divide','normalize','equalizeHist','meanStdDev','minMaxLoc','warpAffine','getRotationMatrix2D','copyMakeBorder','reduce','filter2D','addWeighted','bitwise_not','erode','dilate','countNonZero','calcHist','boundingRect','contourArea','approxPolyDP','arcLength','convexHull','perspectiveTransform','invert','matFromImageData','matFromArray','split','merge','cvtColor','subtract','absdiff','multiply','pyrDown','pyrUp','Sobel','sepFilter2D','matchTemplate','connectedComponents','distanceTransform','inpaint','blur','sqrt','pow','transpose','flip','rotate','Scharr','goodFeaturesToTrack','INTER_LANCZOS4','INTER_CUBIC','THRESH_OTSU','ADAPTIVE_THRESH_GAUSSIAN_C','MORPH_ELLIPSE','CV_32F','CV_8UC1','BORDER_REPLICATE','RETR_EXTERNAL','CHAIN_APPROX_SIMPLE'];
+function run() {
+  try {
+    const have = WANT.filter(k => typeof cv[k] !== 'undefined');
+    const missing = WANT.filter(k => typeof cv[k] === 'undefined');
+    // Sanity: run a real op
+    const m = new cv.Mat(20, 20, cv.CV_8UC1, new cv.Scalar(128));
+    const d = new cv.Mat();
+    cv.GaussianBlur(m, d, new cv.Size(5, 5), 0);
+    const okOp = d.rows === 20;
+    m.delete(); d.delete();
+    window.__probe = { status: 'ok', okOp, have, missing };
+  } catch (e) {
+    window.__probe = { status: 'error', error: String(e) };
+  }
+}
+// The UMD build may already be initialised, or may need its own hook.
+if (typeof cv !== 'undefined') {
+  if (cv.Mat) run();
+  else cv.onRuntimeInitialized = run;
+} else {
+  window.__probe = { status: 'error', error: 'cv global missing' };
+}
+setTimeout(() => { if (window.__probe.status === 'loading') window.__probe = { status: 'timeout' }; }, 45000);
+</script>

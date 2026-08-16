@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' omni:; script-src 'self' omni: 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' omni: 'unsafe-inline'; img-src 'self' omni: data: blob:; connect-src 'self' omni: data: blob:; worker-src 'self' omni: blob:;">
+<title>OmniOCR</title>
+<link rel="stylesheet" href="omni://app/src/ui/app.css">
+<script src="omni://node/utif/UTIF.js"></script>
+<script src="omni://node/libheif-js/libheif-wasm/libheif-bundle.js"></script>
+<script src="omni://node/pdf-lib/dist/pdf-lib.min.js"></script>
+<script src="omni://node/@pdf-lib/fontkit/dist/fontkit.umd.min.js"></script>
+<script src="omni://node/docx/dist/index.umd.cjs"></script>
+</head>
+<body>
+
+<header class="titlebar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M4 4h5V2H2v7h2V4zm16 0v5h2V2h-7v2h5zM4 20v-5H2v7h7v-2H4zm16 0h-5v2h7v-7h-2v5z" fill="currentColor"/><path d="M6 8h12v1.6H6zM6 11.2h12v1.6H6zM6 14.4h8v1.6H6z" fill="currentColor" opacity=".75"/></svg>
+    <span>OmniOCR</span>
+  </div>
+  <div class="tbar-status" id="statusLine">Ready</div>
+  <div class="tbar-actions">
+    <button id="btnAdd" class="btn primary">Add documents</button>
+    <button id="btnFolder" class="btn">Folder…</button>
+    <button id="btnRun" class="btn accent" disabled>Recognise</button>
+    <button id="btnCancel" class="btn danger" hidden>Stop</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ---------------- pages ---------------- -->
+  <aside class="pane pages">
+    <div class="pane-head">
+      <h2>Pages</h2>
+      <span class="chip" id="pageCount">0</span>
+    </div>
+    <div id="pageList" class="page-list" tabindex="0">
+      <div class="empty">
+        <p><strong>Drop documents here</strong></p>
+        <p class="muted">PDF · JPG · PNG · TIFF (multi-page) · HEIC · WEBP · BMP</p>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ---------------- viewer ---------------- -->
+  <section class="pane viewer">
+    <div class="viewer-toolbar">
+      <div class="segmented" id="viewModes">
+        <button data-view="scan" class="on">Scan</button>
+        <button data-view="text">Text</button>
+        <button data-view="structure">Structure</button>
+        <button data-view="diagnostics">Diagnostics</button>
+      </div>
+      <div class="overlay-toggles">
+        <label><input type="checkbox" id="ovLines" checked> Lines</label>
+        <label><input type="checkbox" id="ovBlocks"> Blocks</label>
+        <label><input type="checkbox" id="ovTables" checked> Tables</label>
+        <label><input type="checkbox" id="ovLowConf"> Low confidence</label>
+      </div>
+      <div class="zoom">
+        <button id="zoomOut" class="btn tiny">−</button>
+        <span id="zoomLabel">Fit</span>
+        <button id="zoomIn" class="btn tiny">+</button>
+      </div>
+    </div>
+    <div class="canvas-wrap" id="canvasWrap">
+      <div class="stage" id="stage">
+        <canvas id="pageCanvas"></canvas>
+        <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+      <pre id="textView" class="text-view" hidden></pre>
+      <div id="structureView" class="structure-view" hidden></div>
+      <div id="diagView" class="diag-view" hidden></div>
+    </div>
+    <div class="progress" id="progressBar"><div class="fill" id="progressFill"></div></div>
+  </section>
+
+  <!-- ---------------- settings ---------------- -->
+  <aside class="pane settings">
+    <div class="pane-head"><h2>Recognition</h2></div>
+    <div class="settings-body">
+
+      <label class="field">
+        <span>Effort</span>
+        <select id="optProfile">
+          <option value="fast">Fast — clean scans</option>
+          <option value="balanced" selected>Balanced — recommended</option>
+          <option value="maximum">Maximum — damaged originals</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Language</span>
+        <select id="optLang"><option value="eng">English</option></select>
+      </label>
+      <div class="row">
+        <input id="langCode" class="input tiny-input" placeholder="e.g. fra, swa, deu" maxlength="12">
+        <button id="btnInstallLang" class="btn tiny">Install pack</button>
+      </div>
+
+      <label class="field">
+        <span>Render PDFs at</span>
+        <select id="optDpi">
+          <option value="200">200 dpi — fast</option>
+          <option value="300" selected>300 dpi — standard</option>
+          <option value="400">400 dpi — small print</option>
+          <option value="600">600 dpi — maximum detail</option>
+        </select>
+      </label>
+
+      <fieldset class="switches">
+        <legend>Page handling</legend>
+        <label class="switch"><input type="checkbox" id="optDewarp" checked> Detect page &amp; correct perspective</label>
+        <label class="switch"><input type="checkbox" id="optDeskew" checked> Deskew</label>
+        <label class="switch"><input type="checkbox" id="optRotate" checked> Auto-rotate (OSD)</label>
+        <label class="switch"><input type="checkbox" id="optDepth" checked> Use camera depth when present</label>
+        <label class="switch"><input type="checkbox" id="optTextLayer" checked> Reuse existing PDF text layer</label>
+      </fieldset>
+
+      <fieldset class="switches">
+        <legend>Structure &amp; text</legend>
+        <label class="switch"><input type="checkbox" id="optTables" checked> Reconstruct tables</label>
+        <label class="switch"><input type="checkbox" id="optCorrect" checked> Lexicon-gated correction</label>
+        <label class="switch"><input type="checkbox" id="optEnhance" checked> Export enhanced page image</label>
+      </fieldset>
+
+      <div class="pane-head tight"><h2>Result</h2></div>
+      <div id="metrics" class="metrics">
+        <div class="metric"><span>Confidence</span><b id="mConf">—</b></div>
+        <div class="metric"><span>Quality score</span><b id="mScore">—</b></div>
+        <div class="metric"><span>Page condition</span><b id="mTier">—</b></div>
+        <div class="metric"><span>Words</span><b id="mWords">—</b></div>
+        <div class="metric"><span>Corrections</span><b id="mFixes">—</b></div>
+        <div class="metric"><span>Time</span><b id="mTime">—</b></div>
+      </div>
+
+      <div class="pane-head tight"><h2>Export</h2></div>
+      <div class="exports">
+        <button class="btn wide" data-export="pdf" disabled>Searchable PDF</button>
+        <button class="btn wide" data-export="docx" disabled>Word (.docx)</button>
+        <button class="btn wide" data-export="html" disabled>HTML</button>
+        <button class="btn wide" data-export="txt" disabled>Plain text</button>
+        <button class="btn wide" data-export="md" disabled>Markdown</button>
+        <button class="btn wide" data-export="csv" disabled>Tables (CSV)</button>
+        <button class="btn wide" data-export="hocr" disabled>hOCR</button>
+        <button class="btn wide" data-export="json" disabled>JSON</button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<div id="dropOverlay" class="drop-overlay" hidden><div>Release to add documents</div></div>
+
+<script type="module" src="omni://app/src/ui/app.js"></script>
+</body>
+</html>
