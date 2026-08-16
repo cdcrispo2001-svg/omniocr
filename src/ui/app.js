@@ -112,10 +112,10 @@ function renderPageList() {
     const div = document.createElement('div');
     div.className = `page-item${i === state.selected ? ' sel' : ''}`;
     const dot = p.status === 'done'
-      ? (p.result.confidence >= 90 ? 'good' : p.result.confidence >= 75 ? 'warn' : 'bad')
+      ? (p.result.unreadable ? 'bad' : p.result.confidence >= 90 ? 'good' : p.result.confidence >= 75 ? 'warn' : 'bad')
       : p.status === 'running' ? 'busy' : '';
     const sub = p.status === 'done'
-      ? `${p.result.confidence.toFixed(0)}% · ${p.result.wordCount} words`
+      ? (p.result.unreadable ? 'unreadable — nothing recognised' : `${p.result.confidence.toFixed(0)}% · ${p.result.wordCount} words`)
       : p.digital ? 'text layer' : `${p.imageData.width}×${p.imageData.height}`;
     div.innerHTML = `<div class="thumb" style="background-image:url(${thumbUrl(p)})"></div>
       <div class="meta"><div class="nm">${escapeHtml(p.name)}</div>
@@ -144,7 +144,14 @@ function renderViewer() {
   for (const [k, el] of Object.entries(views)) el.hidden = k !== state.view;
   if (!page) return;
   if (state.view === 'scan') renderScan(page);
-  else if (state.view === 'text') $('textView').textContent = page.result ? page.result.text : '(not recognised yet)';
+  else if (state.view === 'text') {
+    $('textView').textContent = !page.result ? '(not recognised yet)'
+      : page.result.unreadable
+        ? 'This page could not be read.\n\nThe recogniser produced only implausible output, so OmniOCR discarded it '
+          + 'rather than present invented text. Every discarded line is listed under Diagnostics.\n\n'
+          + 'Try: a higher scan resolution, the Maximum effort setting, or re-capturing the page with more even lighting.'
+        : page.result.text;
+  }
   else if (state.view === 'structure') renderStructure(page);
   else renderDiagnostics();
 }
@@ -261,7 +268,7 @@ function renderMetrics() {
   const r = p && p.result;
   $('mConf').textContent = r ? `${r.confidence.toFixed(1)}%` : '—';
   $('mScore').textContent = r ? r.score.toFixed(3) : '—';
-  $('mTier').textContent = r ? r.profile.tier : '—';
+  $('mTier').textContent = r ? (r.unreadable ? 'unreadable' : r.profile.tier) : '—';
   $('mWords').textContent = r ? r.wordCount : '—';
   $('mFixes').textContent = r ? r.corrections.length : '—';
   $('mTime').textContent = r ? `${(r.timings.total / 1000).toFixed(1)}s` : '—';

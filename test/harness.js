@@ -184,6 +184,67 @@ async function exportSelfTest(engine, profile) {
   return { summary, pages: pages.length, words: pages.reduce((s, p) => s + p.wordCount, 0) };
 }
 
+/* ---------------- depth-assisted capture ---------------- */
+
+/**
+ * Build a depth map consistent with a photographed page: the sheet sits nearer
+ * the camera than the surface behind it, and curls slightly along one edge.
+ * Derived from the rendered scene itself so the geometry genuinely agrees with
+ * the image the engine is given.
+ */
+function syntheticDepth(imageData, { curl = 0.12 } = {}) {
+  const dw = Math.max(64, Math.round(imageData.width / 8));
+  const dh = Math.max(64, Math.round(imageData.height / 8));
+  const data = new Float32Array(dw * dh);
+  const src = imageData.data;
+  for (let y = 0; y < dh; y++) {
+    const sy = Math.min(imageData.height - 1, Math.round((y / dh) * imageData.height));
+    for (let x = 0; x < dw; x++) {
+      const sx = Math.min(imageData.width - 1, Math.round((x / dw) * imageData.width));
+      const i = (sy * imageData.width + sx) * 4;
+      const lum = (src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114) / 255;
+      // Paper is bright and near; the surface behind it is darker and further.
+      const onPage = lum > 0.55;
+      const bend = curl * Math.sin((x / dw) * Math.PI);      // gentle cylindrical curl
+      data[y * dw + x] = onPage ? 0.34 + bend : 0.86;
+    }
+  }
+  return { width: dw, height: dh, data, kind: 'depth', source: 'synthetic' };
+}
+
+async function depthSelfTest(engine, profile) {
+  log('');
+  log('Depth-assisted capture');
+  log('─'.repeat(94));
+  const base = render('article');
+  const imageData = await degrade(base.imageData, 'phonePhoto');
+  const depth = syntheticDepth(imageData);
+  log(`  depth map ${depth.width}x${depth.height} derived from the scene`);
+
+  const opts = { profile, dewarp: true, deskew: true, autoRotate: false, tables: true, correct: true, exportImage: false };
+  const withDepth = await engine.page(
+    { imageData, index: 0, name: 'article/phonePhoto+depth', dpi: 300, depth },
+    { ...opts, useDepth: true },
+  );
+  const withoutDepth = await engine.page(
+    { imageData, index: 1, name: 'article/phonePhoto', dpi: 300, depth: null },
+    { ...opts, useDepth: false },
+  );
+
+  const a = score(base.truth, withDepth.text);
+  const b = score(base.truth, withoutDepth.text);
+  log(`  with depth   : CER ${(a.cer * 100).toFixed(2)}%  info=${JSON.stringify(withDepth.depth)}`);
+  log(`  without depth: CER ${(b.cer * 100).toFixed(2)}%`);
+
+  const used = !!(withDepth.depth && withDepth.depth.used);
+  const consumed = used && (withDepth.depth.quad || withDepth.depth.curl);
+  // The requirement is that depth is genuinely consumed and does no harm.
+  const pass = used && consumed && a.cer <= Math.max(0.08, b.cer + 0.02);
+  log(`  depth consumed: ${consumed} (page quad: ${withDepth.depth && withDepth.depth.quad}, curl flattening: ${withDepth.depth && withDepth.depth.curl})`);
+  log(`  ${pass ? 'ok' : 'FAIL'}`);
+  return { pass, withDepth: +a.cer.toFixed(4), withoutDepth: +b.cer.toFixed(4), info: withDepth.depth };
+}
+
 /* ---------------- runner ---------------- */
 
 async function main() {
@@ -193,6 +254,7 @@ async function main() {
   const profile = (args.find((a) => a.startsWith('--harness-profile=')) || '').split('=')[1] || 'balanced';
 
   const exportsOnly = args.includes('--harness-exports');
+  const depthOnly = args.includes('--harness-depth');
   const presets = only ? only.split(',') : PRESET_NAMES;
   const kinds = kindsArg ? kindsArg.split(',') : KINDS;
 
@@ -202,6 +264,13 @@ async function main() {
   const ready = await engine.start({ workers: 3 });
   log(`engine: ${ready.workers} workers · lexicon ${ready.lexicon} · profile ${profile}`);
   log('');
+  if (depthOnly) {
+    const info = await depthSelfTest(engine, profile);
+    await engine.stop();
+    window.omni.harness.done({ pass: info.pass, depth: info });
+    return;
+  }
+
   if (exportsOnly) {
     const info = await exportSelfTest(engine, profile);
     await engine.stop();
