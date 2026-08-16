@@ -479,10 +479,23 @@ Depth is always advisory: if the map is too flat or too noisy to be informative,
 the engine falls back to ordinary geometry. Absence of depth is not an error.
 
 **Verification status.** The extraction helper builds and correctly reports
-absence on images without depth data; the depth *consumption* path is exercised
-end-to-end by the harness with a synthetic depth map. The macOS positive path
-(a real Portrait-mode capture) was not exercised, as no depth-bearing photograph
-was available on the build machine.
+absence on images without depth data. The depth *consumption* path is exercised
+end-to-end (`npm run harness -- --harness-depth`): a depth map describing a
+tilted sheet on a desk is fed alongside the photograph, and the engine is
+required to segment the page from it, recover the corners, and finish no worse
+than it would without depth. It currently scores 0.00% CER with and without.
+
+The macOS *positive* extraction path — a real Portrait-mode capture — was not
+exercised, as no depth-bearing photograph existed on the build machine.
+
+**Depth is advisory, and deliberately timid.** Building this test exposed the
+failure mode that matters: correcting curvature the page does not have is far
+worse than ignoring curvature it does. Two guards came directly out of that.
+Curl is measured only over the page mask — averaging whole columns mixes in the
+surface behind the sheet, so a flat page on a desk reads as steeply curved at
+its edges — and the correction is applied only above a clear curvature
+threshold, with a gentle stretch limit, because resampling distorts glyph
+aspect ratios and costs more than the curl it removes.
 
 ---
 

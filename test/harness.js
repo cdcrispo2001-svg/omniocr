@@ -193,7 +193,7 @@ async function exportSelfTest(engine, profile) {
  * Derived from the rendered scene itself so the geometry genuinely agrees with
  * the image the engine is given.
  */
-function syntheticDepth(imageData, { curl = 0.12 } = {}) {
+function syntheticDepth(imageData, { curl = 0 } = {}) {
   const dw = Math.max(64, Math.round(imageData.width / 8));
   const dh = Math.max(64, Math.round(imageData.height / 8));
   const data = new Float32Array(dw * dh);
@@ -218,8 +218,12 @@ async function depthSelfTest(engine, profile) {
   log('Depth-assisted capture');
   log('─'.repeat(94));
   const base = render('article');
-  const imageData = await degrade(base.imageData, 'phonePhoto');
-  const depth = syntheticDepth(imageData);
+  // A tilted sheet on a desk: the scene depth genuinely describes. (A shadowed
+  // capture cannot be used here — the synthetic map infers the page from
+  // brightness, and a shadow would punch holes in the page it is meant to
+  // describe, testing the generator rather than the engine.)
+  const imageData = await degrade(base.imageData, 'perspective');
+  const depth = syntheticDepth(imageData);   // flat sheet, tilted away from the camera
   log(`  depth map ${depth.width}x${depth.height} derived from the scene`);
 
   const opts = { profile, dewarp: true, deskew: true, autoRotate: false, tables: true, correct: true, exportImage: false };

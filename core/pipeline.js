@@ -240,12 +240,10 @@
       const td = now();
       try {
         const mask = scope.Depth.pageMask(cv, page.depth, gray.cols, gray.rows);
-        if (mask) {
-          quad = scope.Depth.quadFromMask(cv, mask);
-          mask.delete();
-        }
-        const flat = scope.Depth.flattenCurl(cv, gray, page.depth);
+        if (mask) quad = scope.Depth.quadFromMask(cv, mask);
+        const flat = scope.Depth.flattenCurl(cv, gray, page.depth, mask);
         if (flat) { gray.delete(); gray = flat; }
+        if (mask) mask.delete();
         depthInfo = { used: true, source: page.depth.source, kind: page.depth.kind, quad: !!quad, curl: !!flat };
       } catch (err) {
         depthInfo = { used: false, error: String(err) };

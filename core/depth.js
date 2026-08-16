@@ -229,20 +229,36 @@
    * This is an approximation (no camera intrinsics) but reliably recovers
    * several percent of accuracy on photographed book pages.
    */
-  function flattenCurl(cv, gray, depth) {
+  function flattenCurl(cv, gray, depth, mask) {
     const w = gray.cols; const h = gray.rows;
     const dW = depth.width; const dH = depth.height;
-    // Column-wise median depth of the page area.
+
+    // Curl must be measured on the page and nowhere else. Averaging a whole
+    // column mixes in the surface behind the sheet, so a flat page lying on a
+    // desk reads as steeply curved at its edges — and "correcting" that
+    // imaginary curve wrecks the text. Without a page mask we cannot tell page
+    // from background, so we decline to warp anything.
+    if (!mask) return null;
     const colDepth = new Float64Array(w);
+    const colCount = new Int32Array(w);
     for (let x = 0; x < w; x++) {
       const dx = Math.min(dW - 1, Math.round((x / w) * dW));
+      const mx = Math.min(mask.cols - 1, Math.round((x / w) * mask.cols));
       let sum = 0; let n = 0;
-      for (let y = 0; y < dH; y += Math.max(1, dH >> 6)) {
+      for (let y = 0; y < dH; y++) {
+        const my = Math.min(mask.rows - 1, Math.round((y / dH) * mask.rows));
+        if (!mask.data[my * mask.cols + mx]) continue;      // background pixel
         const v = depth.data[y * dW + dx];
         if (Number.isFinite(v)) { sum += v; n++; }
       }
-      colDepth[x] = n ? sum / n : 0.5;
+      colCount[x] = n;
+      colDepth[x] = n ? sum / n : NaN;
     }
+    // Columns with too little page in them cannot be judged; hold them flat.
+    const seen = colDepth.filter((v) => Number.isFinite(v));
+    if (seen.length < w * 0.5) return null;
+    const fallback = seen.reduce((a, b) => a + b, 0) / seen.length;
+    for (let x = 0; x < w; x++) if (!Number.isFinite(colDepth[x])) colDepth[x] = fallback;
     // Smooth, then convert relative depth into a horizontal stretch factor.
     const sm = new Float64Array(w);
     const win = Math.max(5, w >> 6);
@@ -253,13 +269,19 @@
     }
     let min = Infinity; let max = -Infinity;
     for (let x = 0; x < w; x++) { if (sm[x] < min) min = sm[x]; if (sm[x] > max) max = sm[x]; }
-    if (max - min < 0.04) return null;                    // essentially flat — nothing to do
+    // Only correct curvature we are confident about. Resampling the page is
+    // destructive if the evidence is wrong, and a page that is merely tilted
+    // (rather than curled) produces a depth gradient that must not be
+    // "corrected" — perspective rectification already handles tilt.
+    if (max - min < 0.14) return null;
 
     // Cumulative arc length: columns further away represent more real-world width.
     const cum = new Float64Array(w + 1);
     for (let x = 0; x < w; x++) {
       const rel = (sm[x] - min) / (max - min);
-      cum[x + 1] = cum[x] + (1 + rel * 0.35);
+      // Gentle: over-stretching a page distorts glyph aspect ratios and costs
+      // more accuracy than the curl itself.
+      cum[x + 1] = cum[x] + (1 + rel * 0.15);
     }
     const totalArc = cum[w];
     const mapX = new Float32Array(w * h);
